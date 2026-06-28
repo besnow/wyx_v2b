@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Mail;
 use App\Models\MailLog;
@@ -17,7 +18,7 @@ class SendEmailJob implements ShouldQueue
     protected $params;
 
     public $tries = 3;
-    public $timeout = 10;
+    public $timeout = 60;
     /**
      * Create a new job instance.
      *
@@ -27,6 +28,22 @@ class SendEmailJob implements ShouldQueue
     {
         $this->onQueue($queue);
         $this->params = $params;
+
+        if ($queue === 'send_email_mass') {
+            $this->applyMassEmailDelay();
+        }
+    }
+
+    private function applyMassEmailDelay()
+    {
+        $delaySeconds = 31;
+        $cacheKey = 'SEND_EMAIL_MASS_NEXT_AVAILABLE_AT';
+        $now = time();
+        $nextAvailableAt = (int) Cache::get($cacheKey, $now);
+        $availableAt = max($now, $nextAvailableAt);
+
+        Cache::put($cacheKey, $availableAt + $delaySeconds, 86400 * 2);
+        $this->delay(now()->addSeconds($availableAt - $now));
     }
 
     /**
