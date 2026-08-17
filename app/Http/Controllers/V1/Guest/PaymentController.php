@@ -7,7 +7,9 @@ use App\Models\Order;
 use App\Services\OrderService;
 use App\Services\PaymentService;
 use App\Services\TelegramService;
+use App\Services\UserService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class PaymentController extends Controller
 {
@@ -32,7 +34,49 @@ class PaymentController extends Controller
         if (!$order) {
             abort(500, 'order is not found');
         }
-        if ($order->status !== 0) return true;
+        // Besnow 定制：处理订单取消后仍在支付平台完成付款的延迟回调。
+        // 先扣回取消时返还的账户余额，再将订单恢复为待支付状态。
+        if ((int)$order->status === 2) {
+            try {
+                DB::beginTransaction();
+
+                $order = Order::where('trade_no', $tradeNo)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$order) {
+                    DB::rollBack();
+                    return false;
+                }
+
+                if ((int)$order->status === 2) {
+                    if ((int)$order->balance_amount > 0) {
+                        $userService = new UserService();
+                        if (!$userService->addBalance(
+                            (int)$order->user_id,
+                            -(int)$order->balance_amount
+                        )) {
+                            DB::rollBack();
+                            return false;
+                        }
+                    }
+
+                    $order->status = 0;
+                    if (!$order->save()) {
+                        DB::rollBack();
+                        return false;
+                    }
+                }
+
+                DB::commit();
+            } catch (\Throwable $e) {
+                if (DB::transactionLevel() > 0) {
+                    DB::rollBack();
+                }
+                return false;
+            }
+        }
+        if ((int)$order->status !== 0) return true;
         $orderService = new OrderService($order);
         if (!$orderService->paid($callbackNo)) {
             return false;
