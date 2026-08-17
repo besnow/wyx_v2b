@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\V1\Guest;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\OrderHandleJob;
 use App\Models\Order;
 use App\Services\OrderService;
 use App\Services\PaymentService;
@@ -35,9 +34,8 @@ class PaymentController extends Controller
         if (!$order) {
             abort(500, 'order is not found');
         }
-        $shouldDispatchOrderHandle = false;
         // Besnow 定制：处理订单取消后仍在支付平台完成付款的延迟回调。
-        // 先扣回取消时返还的账户余额，再在同一事务内将订单标记为已支付。
+        // 此处只扣回取消时返还的余额并恢复待支付状态，付款确认统一交由 OrderService::paid()。
         if ((int)$order->status === 2) {
             try {
                 DB::beginTransaction();
@@ -63,15 +61,11 @@ class PaymentController extends Controller
                         }
                     }
 
-                    $order->status = 1;
-                    $order->paid_at = time();
-                    $order->callback_no = $callbackNo;
+                    $order->status = 0;
                     if (!$order->save()) {
                         DB::rollBack();
                         return false;
                     }
-
-                    $shouldDispatchOrderHandle = true;
                 }
 
                 DB::commit();
@@ -83,19 +77,10 @@ class PaymentController extends Controller
             }
         }
 
-        if ($shouldDispatchOrderHandle) {
-            // 与 OrderService::paid() 保持一致；事务提交后再派发开通任务。
-            try {
-                OrderHandleJob::dispatch($order->trade_no);
-            } catch (\Throwable $e) {
-                return false;
-            }
-        } else {
-            if ((int)$order->status !== 0) return true;
-            $orderService = new OrderService($order);
-            if (!$orderService->paid($callbackNo)) {
-                return false;
-            }
+        if ((int)$order->status !== 0) return true;
+        $orderService = new OrderService($order);
+        if (!$orderService->paid($callbackNo)) {
+            return false;
         }
         $telegramService = new TelegramService();
         $message = sprintf(
