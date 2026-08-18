@@ -125,10 +125,6 @@ class SendEmailJob implements ShouldQueue
     {
         $message = $exception->getMessage();
 
-        if (preg_match('/(?:\bSMTP\b[^\r\n]*|got (?:an empty )?(?:response|code)[^\r\n]*?)\b4\d{2}\b/i', $message)) {
-            return true;
-        }
-
         return preg_match(
             '/broken pipe|connection reset by peer|connection (?:timed out|timeout|refused)|'
             . 'timed? out|read timeout|end of file|\bEOF\b|empty response|no response|'
