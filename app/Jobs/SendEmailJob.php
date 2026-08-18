@@ -17,7 +17,7 @@ class SendEmailJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
     protected $params;
 
-    public $tries = 3;
+    public $tries = 1;
     public $timeout = 60;
     /**
      * Create a new job instance.
@@ -66,17 +66,19 @@ class SendEmailJob implements ShouldQueue
         $email = $params['email'];
         $subject = $params['subject'];
         $params['template_name'] = 'mail.' . config('v2board.email_template', 'default') . '.' . $params['template_name'];
-        try {
-            sleep(2); 
-            Mail::send(
-                $params['template_name'],
-                $params['template_value'],
-                function ($message) use ($email, $subject) {
-                    $message->to($email)->subject($subject);
+        for ($attempt = 1; $attempt <= 2; $attempt++) {
+            try {
+                $this->send($params, $email, $subject);
+                unset($error);
+                break;
+            } catch (\Throwable $e) {
+                $error = $e->getMessage();
+                if ($attempt === 2 || !$this->isTemporarySmtpError($e)) {
+                    break;
                 }
-            );
-        } catch (\Exception $e) {
-            $error = $e->getMessage();
+
+                sleep(2);
+            }
         }
 
         $log = [
@@ -89,5 +91,49 @@ class SendEmailJob implements ShouldQueue
         MailLog::create($log);
         $log['config'] = config('mail');
         return $log;
+    }
+
+    private function send($params, $email, $subject)
+    {
+        Mail::purge();
+        $transport = null;
+
+        try {
+            $mailer = Mail::mailer();
+            $transport = $mailer->getSwiftMailer()->getTransport();
+            $mailer->send(
+                $params['template_name'],
+                $params['template_value'],
+                function ($message) use ($email, $subject) {
+                    $message->to($email)->subject($subject);
+                }
+            );
+        } finally {
+            if ($transport) {
+                try {
+                    $transport->stop();
+                } catch (\Throwable $cleanupException) {
+                    // Ignore transport cleanup failures without changing the send result.
+                }
+            }
+
+            Mail::purge();
+        }
+    }
+
+    private function isTemporarySmtpError(\Throwable $exception)
+    {
+        $message = $exception->getMessage();
+
+        if (preg_match('/(?:\bSMTP\b[^\r\n]*|got (?:an empty )?(?:response|code)[^\r\n]*?)\b4\d{2}\b/i', $message)) {
+            return true;
+        }
+
+        return preg_match(
+            '/broken pipe|connection reset by peer|connection (?:timed out|timeout|refused)|'
+            . 'timed? out|read timeout|end of file|\bEOF\b|empty response|no response|'
+            . 'unable to connect|failed to connect|could not be established|cannot connect/i',
+            $message
+        ) === 1;
     }
 }
