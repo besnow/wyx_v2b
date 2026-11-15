@@ -46,9 +46,9 @@ class PaymentService
         }
         $currentBase = $this->currentBase();
         if ($currentBase) { 
-            $returnUrl = $currentBase . '/#/order/' . $order['trade_no'];
+            $returnUrl = $currentBase . '/panel/#/order/' . $order['trade_no'];
         } else {
-            $returnUrl = url('/#/order/' . $order['trade_no']);
+            $returnUrl = url('/panel/#/order/' . $order['trade_no']);
         }
         return $this->payment->pay([
             'notify_url' => $notifyUrl,
